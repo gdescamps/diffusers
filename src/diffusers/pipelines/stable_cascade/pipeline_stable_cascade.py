@@ -114,81 +114,90 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
     def encode_prompt(
         self,
         prompt,
+        prompt_embeds_pooled,
+        negative_prompt_embeds_pooled,
         device,
         num_images_per_prompt,
         do_classifier_free_guidance,
         negative_prompt=None,
     ):
-        batch_size = len(prompt) if isinstance(prompt, list) else 1
-        # get prompt text embeddings
-        text_inputs = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            truncation=True,
-            return_tensors="pt",
-        )
-        text_input_ids = text_inputs.input_ids
-        attention_mask = text_inputs.attention_mask
-
-        untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
-
-        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
-            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1])
-            logger.warning(
-                "The following part of your input was truncated because CLIP can only handle sequences up to"
-                f" {self.tokenizer.model_max_length} tokens: {removed_text}"
-            )
-
-        text_encoder_output = self.text_encoder(text_input_ids.to(device), attention_mask=attention_mask.to(device))
-        prompt_embeds_pooled = text_encoder_output.text_embeds.unsqueeze(1)
-        prompt_embeds_pooled = prompt_embeds_pooled.repeat_interleave(num_images_per_prompt, dim=0)
-
-        negative_prompt_embeds_pooled = None
-        if do_classifier_free_guidance:
-            uncond_tokens: List[str]
-            if negative_prompt is None:
-                uncond_tokens = [""] * batch_size
-            elif type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif isinstance(negative_prompt, str):
-                uncond_tokens = [negative_prompt]
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-            else:
-                uncond_tokens = negative_prompt
-
-            uncond_input = self.tokenizer(
-                uncond_tokens,
+        if prompt_embeds_pooled is None:
+            batch_size = len(prompt) if isinstance(prompt, list) else 1
+            # get prompt text embeddings
+            text_inputs = self.tokenizer(
+                prompt,
                 padding="max_length",
                 max_length=self.tokenizer.model_max_length,
                 truncation=True,
                 return_tensors="pt",
             )
-            negative_prompt_embeds_text_encoder_output = self.text_encoder(
-                uncond_input.input_ids.to(device), attention_mask=uncond_input.attention_mask.to(device)
-            )
+            text_input_ids = text_inputs.input_ids
+            attention_mask = text_inputs.attention_mask
 
-            negative_prompt_embeds_pooled = negative_prompt_embeds_text_encoder_output.text_embeds.unsqueeze(1)
+            untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
-            # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
-            seq_len = negative_prompt_embeds_pooled.shape[1]
-            negative_prompt_embeds_pooled = negative_prompt_embeds_pooled.repeat(1, num_images_per_prompt, 1)
-            negative_prompt_embeds_pooled = negative_prompt_embeds_pooled.view(
-                batch_size * num_images_per_prompt, seq_len, -1
-            )
-            # done duplicates
+            if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
+                removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1])
+                logger.warning(
+                    "The following part of your input was truncated because CLIP can only handle sequences up to"
+                    f" {self.tokenizer.model_max_length} tokens: {removed_text}"
+                )
 
-            # For classifier free guidance, we need to do two forward passes.
-            # Here we concatenate the unconditional and text embeddings into a single batch
-            # to avoid doing two forward passes
+            text_encoder_output = self.text_encoder(text_input_ids.to(device), attention_mask=attention_mask.to(device))
+            prompt_embeds_pooled = text_encoder_output.text_embeds.unsqueeze(1)
+            prompt_embeds_pooled = prompt_embeds_pooled.repeat_interleave(num_images_per_prompt, dim=0)
+        else:
+            prompt_embeds_pooled = prompt_embeds_pooled.unsqueeze(1)
+
+        if negative_prompt_embeds_pooled is None:
+            if do_classifier_free_guidance:
+                uncond_tokens: List[str]
+                if negative_prompt is None:
+                    uncond_tokens = [""] * batch_size
+                elif type(prompt) is not type(negative_prompt):
+                    raise TypeError(
+                        f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
+                        f" {type(prompt)}."
+                    )
+                elif isinstance(negative_prompt, str):
+                    uncond_tokens = [negative_prompt]
+                elif batch_size != len(negative_prompt):
+                    raise ValueError(
+                        f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
+                        f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
+                        " the batch size of `prompt`."
+                    )
+                else:
+                    uncond_tokens = negative_prompt
+
+                uncond_input = self.tokenizer(
+                    uncond_tokens,
+                    padding="max_length",
+                    max_length=self.tokenizer.model_max_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                negative_prompt_embeds_text_encoder_output = self.text_encoder(
+                    uncond_input.input_ids.to(device), attention_mask=uncond_input.attention_mask.to(device)
+                )
+
+                negative_prompt_embeds_pooled = negative_prompt_embeds_text_encoder_output.text_embeds.unsqueeze(1)
+
+                # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
+                seq_len = negative_prompt_embeds_pooled.shape[1]
+                negative_prompt_embeds_pooled = negative_prompt_embeds_pooled.repeat(1, num_images_per_prompt, 1)
+                negative_prompt_embeds_pooled = negative_prompt_embeds_pooled.view(
+                    batch_size * num_images_per_prompt, seq_len, -1
+                )
+                # done duplicates
+
+                # For classifier free guidance, we need to do two forward passes.
+                # Here we concatenate the unconditional and text embeddings into a single batch
+                # to avoid doing two forward passes
+            
+        else:
+            negative_prompt_embeds_pooled = negative_prompt_embeds_pooled.unsqueeze(1)
+
         return prompt_embeds_pooled, negative_prompt_embeds_pooled
 
     @property
@@ -209,6 +218,8 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
         self,
         image_embeddings: Union[torch.FloatTensor, List[torch.FloatTensor]],
         prompt: Union[str, List[str]] = None,
+        prompt_embeds_pooled: Optional[torch.FloatTensor] = None,
+        negative_prompt_embeds_pooled: Optional[torch.FloatTensor] = None,
         num_inference_steps: int = 10,
         timesteps: Optional[List[float]] = None,
         guidance_scale: float = 0.0,
@@ -289,12 +300,14 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
         dtype = self.decoder.dtype
         self._guidance_scale = guidance_scale
 
-        # 1. Check inputs. Raise error if not correct
-        if not isinstance(prompt, list):
-            if isinstance(prompt, str):
-                prompt = [prompt]
-            else:
-                raise TypeError(f"'prompt' must be of type 'list' or 'str', but got {type(prompt)}.")
+        # 1. Check inputs. Raise error if not correct        
+        
+        # prompt_embeds_pooled = prompt_embeds_pooled
+        # if not isinstance(prompt, list):
+        #     if isinstance(prompt, str):
+        #         prompt = [prompt]
+        #     else:
+        #         raise TypeError(f"'prompt' must be of type 'list' or 'str', but got {type(prompt)}.")
 
         if self.do_classifier_free_guidance:
             if negative_prompt is not None and not isinstance(negative_prompt, list):
@@ -323,14 +336,18 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
         # 2. Encode caption
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt,
+            prompt_embeds_pooled,
+            negative_prompt_embeds_pooled,
             device,
             image_embeddings.size(0) * num_images_per_prompt,
             self.do_classifier_free_guidance,
             negative_prompt,
         )
-        prompt_embeds_pooled = (
-            torch.cat([prompt_embeds, negative_prompt_embeds]) if negative_prompt_embeds is not None else prompt_embeds
-        )
+
+        # prompt_embeds_pooled = (
+        #     torch.cat([prompt_embeds, negative_prompt_embeds]) if negative_prompt_embeds is not None else prompt_embeds
+        # )
+        prompt_embeds_pooled = prompt_embeds
 
         # 3. Determine latent shape of latents
         latent_height = int(image_embeddings.size(2) * self.config.latent_dim_scale)
@@ -342,7 +359,7 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
             self.scheduler.set_timesteps(timesteps=timesteps, device=device)
             timesteps = self.scheduler.timesteps
             num_inference_steps = len(timesteps)
-        else:
+        else:       
             self.scheduler.set_timesteps(num_inference_steps, device=device)
             timesteps = self.scheduler.timesteps
 

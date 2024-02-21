@@ -159,6 +159,8 @@ class StableCascadePriorPipeline(DiffusionPipeline, LoraLoaderMixin):
             prompt_embeds = text_encoder_output.hidden_states[-1]
             if prompt_embeds_pooled is None:
                 prompt_embeds_pooled = text_encoder_output.text_embeds.unsqueeze(1)
+        else:
+            prompt_embeds_pooled = prompt_embeds_pooled.unsqueeze(1)
 
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype, device=device)
         prompt_embeds_pooled = prompt_embeds_pooled.to(dtype=self.text_encoder.dtype, device=device)
@@ -169,11 +171,6 @@ class StableCascadePriorPipeline(DiffusionPipeline, LoraLoaderMixin):
             uncond_tokens: List[str]
             if negative_prompt is None:
                 uncond_tokens = [""] * batch_size
-            elif type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
             elif isinstance(negative_prompt, str):
                 uncond_tokens = [negative_prompt]
             elif batch_size != len(negative_prompt):
